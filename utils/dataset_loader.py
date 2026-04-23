@@ -10,6 +10,7 @@ from models.models import OANTestCase
 def _normalize_item(item: dict) -> OANTestCase:
     language = item.get("language") or item.get("target_lang") or item.get("source_lang") or "en"
     question = item.get("question") or item.get("input")
+    expected = item.get("expected_output") or item.get("expected_answer") or None
     if not question:
         raise ValueError(f"Dataset item {item.get('name', '<unknown>')} is missing question/input")
 
@@ -25,6 +26,7 @@ def _normalize_item(item: dict) -> OANTestCase:
         category=item.get("category", "general"),
         language=language,
         input=question,
+        expected=expected,
         is_decline=item.get("is_decline", False),
         context=item.get("context", []),
     )

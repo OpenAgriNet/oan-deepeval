@@ -31,6 +31,7 @@ class ReportCase:
     language_label: str
     is_decline: bool
     question: str
+    expected_output: str | None
     actual_output: str | None
     api_error: bool
     result: CaseResult | None
@@ -58,6 +59,7 @@ class ReportBuilder:
             language_label=LANGUAGE_LABELS.get(tc.language, tc.language),
             is_decline=tc.is_decline,
             question=tc.input,
+            expected_output=tc.expected,
             actual_output=None,
             api_error=True,
             result=None,
@@ -89,6 +91,7 @@ class ReportBuilder:
             language_label=LANGUAGE_LABELS.get(tc.language, tc.language),
             is_decline=tc.is_decline,
             question=tc.input,
+            expected_output=tc.expected,
             actual_output=actual_output,
             api_error=False,
             result=result,
@@ -257,6 +260,7 @@ class ReportBuilder:
                 "language_label": c.language_label,
                 "is_decline": c.is_decline,
                 "question": c.question,
+                "expected_output": c.expected_output,
                 "actual_output": c.actual_output or "",
                 "pass_rate": c.pass_rate,
                 "status": c.status,

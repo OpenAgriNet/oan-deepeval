@@ -1,0 +1,29 @@
+[
+  {
+    "_section": "=== SCHEME INFORMATION ==="
+  },
+  {
+    "category": "scheme",
+    "language": "en",
+    "question": "I am a Tamil Nadu farmer, what is Pradhan Mantri Fasal Bima Yojana and how does it help me?",
+    "expected_answer": "Should explain PMFBY as a crop insurance scheme, cover premium rates (Kharif: 2%, Rabi: 1.5%), claim process, and how Tamil Nadu farmers can enroll — ideally mentioning state-specific implementation or nodal agency. If scheme details unavailable, should clearly say so."
+  },
+  {
+    "_section": "=== CROP ADVISORY ==="
+  },
+  {
+    "category": "advisory",
+    "language": "ta",
+    "question": "நான் காய்கறி விவசாயி, விழுப்புரம் பகுதியில் எந்த காய்கறி நல்லா வரும், எப்படி சாகுபடி செய்யலாம்?",
+    "expected_answer": "Should respond in Tamil. Should recommend vegetables well-suited to Villupuram's agro-climatic conditions (e.g., brinjal, drumstick, tomato, ladies finger), and provide basic cultivation tips — sowing season, soil prep, irrigation, and common pest management. If location-specific data unavailable, should give general Tamil Nadu vegetable advisory."
+  },
+  {
+    "_section": "=== MANDI DETAILS ==="
+  },
+  {
+    "category": "mandi_details",
+    "language": "en",
+    "question": "What is the mandi fee for wheat in pune?",
+    "expected_answer": "if mandi detail is available it in the souce it should pass else it should properly address the lack of info "
+  }
+]

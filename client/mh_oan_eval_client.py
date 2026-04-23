@@ -1,11 +1,3 @@
-import json
-import time
-import threading
-from dotenv import load_dotenv
-import requests
-load_dotenv()
-
-
 import logging
 import threading
 import time
@@ -13,17 +5,23 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from dotenv import load_dotenv
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 
 class Mh_OANEvalClient:
     """
-    HTTP client for the OAN evaluation service.
+    HTTP client for the MH OAN evaluation service.
 
-    Supports context-manager usage::
+    Liveness check runs ONCE at construction.
+    Each worker thread gets its own Session for true parallel connections.
+    The static token is shared safely (read-only after init).
 
-        with OANEvalClient(base_url=..., token=...) as client:
+    Context-manager usage::
+
+        with Mh_OANEvalClient(base_url=..., token=...) as client:
             response = client.chat("What crops grow in Karnataka?")
     """
 
@@ -35,16 +33,18 @@ class Mh_OANEvalClient:
         liveness_retry_wait: float = 3.0,
     ):
         self.base_url = base_url.rstrip("/")
-        self.token = token
+        self.token = token                         # read-only after init — no lock needed
         self.liveness_retry_count = liveness_retry_count
         self.liveness_retry_wait = liveness_retry_wait
 
-        self._lock = threading.Lock()
-        self._session = self._build_session()
+        # Each worker thread gets its own Session via this
+        self._thread_local = threading.local()
+
+        # Liveness runs ONCE here, not per-thread
         self._wait_for_liveness()
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Thread-local Session
     # ------------------------------------------------------------------
 
     def _build_session(self) -> requests.Session:
@@ -62,30 +62,52 @@ class Mh_OANEvalClient:
             session.headers["Authorization"] = f"Bearer {self.token}"
         return session
 
+    @property
+    def _session(self) -> requests.Session:
+        """One Session per worker thread — parallel connection pools, no contention."""
+        if not hasattr(self._thread_local, "session"):
+            self._thread_local.session = self._build_session()
+            logger.debug(
+                "New session created for thread %s",
+                threading.current_thread().name,
+            )
+        return self._thread_local.session
+
+    # ------------------------------------------------------------------
+    # Liveness — runs once at __init__, never again
+    # ------------------------------------------------------------------
+
     def _wait_for_liveness(self) -> None:
         url = f"{self.base_url}/api/health/live"
-        for attempt in range(1, self.liveness_retry_count + 1):
-            try:
-                r = self._session.get(url, headers={"Accept": "application/json"}, timeout=5)
-                # 200 = live; 403 = live but auth-gated (WAF / reverse proxy in CI)
-                if r.status_code in (200, 403):
-                    logger.info("Service is live — HTTP %s (attempt %d)", r.status_code, attempt)
-                    return
-                logger.warning(
-                    "Liveness check failed: HTTP %s (attempt %d/%d)",
-                    r.status_code, attempt, self.liveness_retry_count,
-                )
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Liveness check error: %s (attempt %d/%d)",
-                    exc, attempt, self.liveness_retry_count,
-                )
-
-            if attempt < self.liveness_retry_count:
-                time.sleep(self.liveness_retry_wait)
+        # Use a plain one-off session so thread-local isn't touched yet
+        probe = requests.Session()
+        try:
+            for attempt in range(1, self.liveness_retry_count + 1):
+                try:
+                    r = probe.get(url, headers={"Accept": "application/json"}, timeout=5)
+                    if r.status_code in (200, 403):
+                        logger.info(
+                            "[Mh_OANEvalClient] Service is live — HTTP %s (attempt %d)",
+                            r.status_code, attempt,
+                        )
+                        return
+                    logger.warning(
+                        "[Mh_OANEvalClient] Liveness: HTTP %s (attempt %d/%d)",
+                        r.status_code, attempt, self.liveness_retry_count,
+                    )
+                except requests.RequestException as exc:
+                    logger.warning(
+                        "[Mh_OANEvalClient] Liveness error: %s (attempt %d/%d)",
+                        exc, attempt, self.liveness_retry_count,
+                    )
+                if attempt < self.liveness_retry_count:
+                    time.sleep(self.liveness_retry_wait)
+        finally:
+            probe.close()   # discard the probe session immediately
 
         raise RuntimeError(
-            f"Service did not become live after {self.liveness_retry_count} attempts."
+            f"[Mh_OANEvalClient] Service did not become live after "
+            f"{self.liveness_retry_count} attempts."
         )
 
     # ------------------------------------------------------------------
@@ -102,9 +124,7 @@ class Mh_OANEvalClient:
     ) -> str | None:
         """
         Send a chat query and return the full streamed response as a string.
-
-        Returns ``None`` if the server returns a non-200 status or the
-        response body is empty after stripping whitespace.
+        Runs fully in parallel — no locks held during the HTTP call.
         """
         url = f"{self.base_url}/api/chat/"
         params = {
@@ -116,35 +136,36 @@ class Mh_OANEvalClient:
         }
 
         try:
-            with self._lock:
-                response = self._session.get(url, params=params, stream=True, timeout=60)
+            # _session is thread-local — no lock needed
+            response = self._session.get(url, params=params, stream=True, timeout=60)
         except requests.RequestException as exc:
-            logger.error("Chat request raised an exception: %s", exc)
+            logger.error("[Mh_OANEvalClient] Chat request raised: %s", exc)
             return None
 
         if response.status_code != 200:
-            logger.error("Chat request failed: HTTP %s", response.status_code)
+            logger.error("[Mh_OANEvalClient] Chat failed: HTTP %s", response.status_code)
             return None
 
-        raw: bytearray = bytearray()
+        raw = bytearray()
         for chunk in response.iter_content(chunk_size=1024):
             if chunk:
                 raw.extend(chunk)
 
-        result = raw.decode("utf-8", errors="replace").strip()
-        return result or None
+        return raw.decode("utf-8", errors="replace").strip() or None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Release the underlying connection pool."""
-        self._session.close()
-        logger.debug("OANEvalClient session closed.")
+        """Close this thread's session if one was opened."""
+        session = getattr(self._thread_local, "session", None)
+        if session is not None:
+            session.close()
+            del self._thread_local.session
+        logger.debug("[Mh_OANEvalClient] Session closed for thread %s", threading.current_thread().name)
 
-    # Alias kept for backward compatibility
-    shutdown = close
+    shutdown = close  # backward compatibility
 
     def __enter__(self) -> "Mh_OANEvalClient":
         return self

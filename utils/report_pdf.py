@@ -55,8 +55,8 @@ MARGIN = 18 * mm
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def _pct(val: float) -> str:
-    return f"{val * 100:.1f}%"
+def _pct(val: float | None) -> str:
+    return f"{(val or 0.0) * 100:.1f}%"
 
 
 def _pass_color(rate: float) -> colors.Color:
@@ -280,8 +280,8 @@ def _metric_table(by_metric: list, st: dict) -> Table:
     rows = [headers]
 
     for item in sorted(by_metric, key=lambda x: x.get("pass_rate", 0)):
-        rate    = item.get("pass_rate", 0.0) or 0.0
-        score   = item.get("avg_score", 0.0) or 0.0
+        rate    = float(item.get("pass_rate") or 0.0)
+        score   = float(item.get("avg_score") or 0.0)
         reasons = item.get("common_failure_reasons", [])
         top_r   = reasons[0][:100] + "…" if reasons and len(reasons[0]) > 100 else (reasons[0] if reasons else "—")
         style_key = "pass_cell" if rate >= 0.8 else ("warn_cell" if rate >= 0.6 else "fail_cell")
@@ -399,6 +399,7 @@ def _failed_case_block(case: dict, st: dict, idx: int) -> list:
     status = case.get("status", "FAIL")
     is_decline = case.get("is_decline", False)
     question   = (case.get("question") or "")[:300]
+    expected   = (case.get("expected_output") or "")[:400]
     output     = (case.get("actual_output") or "")[:400]
     api_err    = case.get("api_error", False)
 
@@ -430,8 +431,10 @@ def _failed_case_block(case: dict, st: dict, idx: int) -> list:
     # Q&A block
     qa_data = [
         [Paragraph("<b>Input</b>", st["small"]),  Paragraph(question, st["cell"])],
-        [Paragraph("<b>Output</b>", st["small"]), Paragraph(output,   st["cell"])],
     ]
+    if expected:
+        qa_data.append([Paragraph("<b>Expected</b>", st["small"]), Paragraph(expected, st["cell"])])
+    qa_data.append([Paragraph("<b>Output</b>", st["small"]), Paragraph(output,   st["cell"])])
     qa_table = Table(
         qa_data,
         colWidths=[(W - 2 * MARGIN) * 0.10, (W - 2 * MARGIN) * 0.90],
@@ -450,8 +453,8 @@ def _failed_case_block(case: dict, st: dict, idx: int) -> list:
     m_headers = ["Metric", "Score", "Threshold", "Status", "Reason"]
     m_rows = [m_headers]
     for m in case.get("metrics", []):
-        score     = m.get("score", 0.0) or 0.0
-        threshold = m.get("threshold", 0.5) or 0.5
+        score     = float(m.get("score") or 0.0)
+        threshold = float(m.get("threshold") or 0.5)
         m_status  = m.get("status", "?")
         reason    = (m.get("reason") or "—")[:200]
         sk        = "pass_cell" if m_status == "PASS" else "fail_cell"
@@ -531,8 +534,8 @@ def save_report_pdf(report: dict[str, Any], output_path: "str | Path") -> Path:
 
     judge   = meta.get("judge_model", "unknown")
     gen_at  = meta.get("generated_at", "")
-    pr_thr  = meta.get("pass_rate_threshold", 0.7)
-    ge_thr  = meta.get("geval_threshold", 0.5)
+    pr_thr  = float(meta.get("pass_rate_threshold") or 0.7)
+    ge_thr  = float(meta.get("geval_threshold") or 0.5)
     title   = f"OAN Eval · {judge} · {gen_at[:10]}"
 
     doc = SimpleDocTemplate(

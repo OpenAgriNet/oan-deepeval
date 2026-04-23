@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
-from deepeval import evaluate
-from deepeval.evaluate import AsyncConfig, DisplayConfig
 from deepeval.test_case import LLMTestCase
 
 from settings.config import JUDGE_MODEL
@@ -65,7 +64,7 @@ def evaluate_case(
     case = LLMTestCase(
         input=tc.input,
         actual_output=actual_output,
-        retrieval_context=tc.context or None,
+        expected_output=tc.expected,
     )
     metrics = get_metrics_for_case(
         is_decline=tc.is_decline,
@@ -73,12 +72,10 @@ def evaluate_case(
         judge_model=judge_model,
     )
 
-    evaluate(
-        test_cases=[case],
-        metrics=metrics,
-        async_config=AsyncConfig(run_async=False),
-        display_config=DisplayConfig(print_results=False, show_indicator=False),
-    )
+    async def _measure_all() -> None:
+        await asyncio.gather(*[m.a_measure(case) for m in metrics])
+
+    asyncio.run(_measure_all())
 
     lang_label = LANGUAGE_LABELS.get(tc.language, tc.language)
     path = "decline" if tc.is_decline else f"category={tc.category}"
@@ -93,7 +90,7 @@ def evaluate_case(
         status = "PASS" if ok else "FAIL"
         raw_score = round((metric.score or 0.0) * 10)
         rubric_range, rubric_desc = _find_rubric(metric, raw_score)
-        results_log.append(f"  {metric.name:<35} {metric.score:.3f} [{status}] {metric.reason}")
+        results_log.append(f"  {metric.name:<35} {(metric.score or 0.0):.3f} [{status}] {metric.reason}")
         metric_results.append(
             MetricResult(
                 name=metric.name,
@@ -109,7 +106,7 @@ def evaluate_case(
             passed += 1
         else:
             failures.append(
-                f"{metric.name} FAILED (score={metric.score:.3f}): {metric.reason}"
+                f"{metric.name} FAILED (score={(metric.score or 0.0):.3f}): {metric.reason}"
             )
 
     result = CaseResult(

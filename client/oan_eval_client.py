@@ -13,7 +13,7 @@ class OANEvalClient:
         api_key: str | None = None,
         liveness_retry_count: int = 5,
         liveness_retry_wait: float = 3.0,
-        token_refresh_buffer: float = 60.0,  # seconds before expiry to refresh
+        token_refresh_buffer: float = 60.0,
         token_params: dict = {
             "mobile": "9876543212",
             "name": "OAN Eval Client",
@@ -26,18 +26,17 @@ class OANEvalClient:
         self.liveness_retry_count = liveness_retry_count
         self.liveness_retry_wait = liveness_retry_wait
         self.token_refresh_buffer = token_refresh_buffer
-        self.token_params = token_params or {
-            "mobile": "0000000000",
-            "name": "Deepeval Tester",
-            "role": "Evaluator",
-            "metadata": "Testing access token generation for DeepEval moderation evals",
-        }
+        self.token_params = token_params
 
         self._token: str | None = None
-        self._token_expiry: float = 0.0  # unix timestamp
+        self._token_expiry: float = 0.0
         self._lock = threading.Lock()
         self._refresh_timer: threading.Timer | None = None
 
+        # Each worker thread gets its own Session — real parallel connections
+        self._thread_local = threading.local()
+
+        # These run ONCE at construction time, not per-thread
         self._wait_for_liveness()
         if self.api_key:
             self._token = self.api_key
@@ -46,21 +45,32 @@ class OANEvalClient:
             self._refresh_token()
 
     # ------------------------------------------------------------------
-    # Liveness
+    # Thread-local Session
+    # ------------------------------------------------------------------
+
+    @property
+    def _session(self) -> requests.Session:
+        """One requests.Session per thread — gives parallel connection pools."""
+        if not hasattr(self._thread_local, "session"):
+            self._thread_local.session = requests.Session()
+            print(f"[OANEvalClient] New session for thread {threading.current_thread().name}")
+        return self._thread_local.session
+
+    # ------------------------------------------------------------------
+    # Liveness — called once at __init__
     # ------------------------------------------------------------------
 
     def _wait_for_liveness(self) -> None:
         url = f"{self.base_url}/api/health/live"
         for attempt in range(1, self.liveness_retry_count + 1):
             try:
-                response = requests.get(url, headers={"accept": "application/json"}, timeout=5)
-                # 200 = live, 403 = live but auth-gated (e.g. WAF/reverse proxy in CI)
-                if response.status_code in (200, 403):
-                    print(f"[OANEvalClient] Service is live — status {response.status_code} (attempt {attempt})")
+                resp = requests.get(url, headers={"accept": "application/json"}, timeout=5)
+                if resp.status_code in (200, 403):
+                    print(f"[OANEvalClient] Service is live (attempt {attempt})")
                     return
-                print(f"[OANEvalClient] Liveness check failed: status {response.status_code} (attempt {attempt}/{self.liveness_retry_count})")
+                print(f"[OANEvalClient] Liveness: status {resp.status_code} (attempt {attempt}/{self.liveness_retry_count})")
             except requests.RequestException as e:
-                print(f"[OANEvalClient] Liveness check error: {e} (attempt {attempt}/{self.liveness_retry_count})")
+                print(f"[OANEvalClient] Liveness error: {e} (attempt {attempt}/{self.liveness_retry_count})")
 
             if attempt < self.liveness_retry_count:
                 time.sleep(self.liveness_retry_wait)
@@ -70,24 +80,22 @@ class OANEvalClient:
         )
 
     # ------------------------------------------------------------------
-    # Token management
+    # Token management — one shared token, background refresh
     # ------------------------------------------------------------------
 
     def _fetch_token(self) -> tuple[str, float]:
-        """Returns (token, expiry_unix_timestamp)."""
         url = f"{self.base_url}/api/token"
-        response = requests.post(
+        resp = requests.post(
             url,
             params=self.token_params,
             headers={"accept": "application/json"},
             timeout=10,
         )
-        response.raise_for_status()
-        data = response.json()
+        resp.raise_for_status()
+        data = resp.json()
         token = data["token"]
         expires_in: int = data.get("expires_in", 900)
-        expiry = time.time() + expires_in
-        return token, expiry
+        return token, time.time() + expires_in
 
     def _refresh_token(self) -> None:
         with self._lock:
@@ -96,11 +104,9 @@ class OANEvalClient:
             self._token_expiry = expiry
             print(f"[OANEvalClient] Token refreshed — expires in {int(expiry - time.time())}s")
 
-        # Cancel previous timer if any
         if self._refresh_timer is not None:
             self._refresh_timer.cancel()
 
-        # Schedule next refresh before expiry
         refresh_in = max((self._token_expiry - time.time()) - self.token_refresh_buffer, 5)
         self._refresh_timer = threading.Timer(refresh_in, self._refresh_token)
         self._refresh_timer.daemon = True
@@ -113,13 +119,12 @@ class OANEvalClient:
             if self._token is None:
                 raise RuntimeError("[OANEvalClient] Token not initialized")
             if time.time() >= self._token_expiry - self.token_refresh_buffer:
-                # Synchronous fallback if timer didn't fire in time
                 print("[OANEvalClient] Token near expiry — refreshing synchronously")
                 self._refresh_token()
             return self._token
 
     # ------------------------------------------------------------------
-    # Chat
+    # Chat — uses shared token, per-thread session
     # ------------------------------------------------------------------
 
     def chat(
@@ -130,7 +135,7 @@ class OANEvalClient:
         source_lang: str = "en",
         target_lang: str = "en",
     ) -> str | None:
-        response = requests.get(
+        resp = self._session.get(        # <-- thread-local session
             f"{self.base_url}/api/chat/",
             params={
                 "query": query,
@@ -139,22 +144,21 @@ class OANEvalClient:
                 "source_lang": source_lang,
                 "target_lang": target_lang,
             },
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers={"Authorization": f"Bearer {self.token}"},  # <-- shared token
             stream=True,
             timeout=60,
         )
 
-        if response.status_code != 200:
-            print(f"[OANEvalClient] Chat request failed: {response.status_code}")
+        if resp.status_code != 200:
+            print(f"[OANEvalClient] Chat failed: {resp.status_code}")
             return None
 
-        raw: bytearray = bytearray()
-        for chunk in response.iter_content(chunk_size=1024):
+        raw = bytearray()
+        for chunk in resp.iter_content(chunk_size=1024):
             if chunk:
                 raw.extend(chunk)
 
-        output = raw.decode("utf-8", errors="replace").strip()
-        return output or None
+        return raw.decode("utf-8", errors="replace").strip() or None
 
     # ------------------------------------------------------------------
     # Cleanup

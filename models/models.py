@@ -24,6 +24,7 @@ class OANTestCase:
     category: str
     language: str
     input: str
+    expected: str | None = None
     is_decline: bool = False
     context: list[str] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: f"eval-{uuid.uuid4().hex}")
