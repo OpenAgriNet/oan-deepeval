@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from utils.evaluator import CaseResult, PASS_RATE_THRESHOLD
+from settings.config import GEVAL_THRESHOLD, PASS_RATE_THRESHOLD
+from utils.evaluator import CaseResult
 from utils.report_pdf import save_report_pdf  # re-export
 from models.models import LANGUAGE_LABELS, OANTestCase
 
@@ -120,7 +121,7 @@ class ReportBuilder:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "judge_model": judge_model or "gpt-4o-mini",
             "pass_rate_threshold": PASS_RATE_THRESHOLD,
-            "geval_threshold": 0.6,  # hardcoded for now
+            "geval_threshold": GEVAL_THRESHOLD,
             "total_cases": total_cases,
             "passed_cases": passed_cases,
             "failed_cases": failed_cases,

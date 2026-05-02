@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from settings.config import BASE_URL, DATASET_PATH
+from settings.config import BASE_URL, DATASET_PATH, PASS_RATE_THRESHOLD
 from utils.dataset_loader import build_test_cases
-from utils.evaluator import PASS_RATE_THRESHOLD, evaluate_case
+from utils.evaluator import evaluate_case
 from utils.execution import fetch_all_outputs
 from models.models import OANTestCase
 from utils.report import report_builder

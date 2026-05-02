@@ -5,11 +5,11 @@ from dataclasses import dataclass, field
 
 from deepeval.test_case import LLMTestCase
 
-from settings.config import JUDGE_MODEL
+from settings.config import JUDGE_MODEL, PASS_RATE_THRESHOLD
 from metric_factory import get_metrics_for_case
 from models.models import LANGUAGE_LABELS, OANTestCase
 
-PASS_RATE_THRESHOLD: float = 0.70  # case passes if >= 70 % of metrics pass
+
 
 
 @dataclass
